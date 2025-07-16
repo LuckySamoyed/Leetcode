@@ -1,0 +1,219 @@
+7.7
+--------------------------------------------------------------------------------------------------------------
+--没加scene_app,没统计时长信息
+select imei_source, 
+    channel_name, 
+    splited_expid, 
+    imei, 
+    is_feed_act_imei, 
+    SUM(show_num), 
+    SUM(click_num), 
+    SUM(play_time), 
+    SUM(channel_duration), 
+    SUM(using_duration), 
+    SUM(like_num), 
+    SUM(comment_num), 
+    SUM(negative_num)
+from (
+    select 
+        imei_source, 
+        channel_name, 
+        split(concat_ws(',', expid, '000'), ',') as expid_array, 
+        imei, 
+        is_feed_act_imei, 
+        show_num, 
+        click_num, 
+        play_time,
+        channel_duration, 
+        using_duration, 
+        like_num, 
+        comment_num, 
+        negative_num
+    FROM bi_alg_dev.dm_brn_imei_news_info_di
+    where day = "2025-07-06"
+    )
+subquery lateral view explode(expid_array) exploded as splited_expid
+group by imei_source, channel_name, splited_expid, imei, is_feed_act_imei;
+
+
+-- 这个相当于两个查询？  0707-9        问题：  浏览时长很多为负数  且 group by 在外层的话执行时间会很长  执行时间 35m
+select scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei, SUM(show_num), SUM(click_num), SUM(play_time), SUM(using_duration), (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num), SUM(comment_num), SUM(negative_num)
+from (select scene_app, imei_source, channel_name, split(concat_ws(',', expid, '000'), ',') as expid_array, imei, is_feed_act_imei, show_num, click_num, play_time, using_duration, like_num, comment_num, negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+)
+subquery lateral view explode(expid_array) exploded as splited_expid
+group by scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei;
+
+
+-- 怎么  浏览时长=使用时长-消费时长  出现了负值   using_duration - play_time
+
+
+
+-- 还在跑  查询1        问题： 执行时间超级长  执行时间 52m
+select scene_app, imei_source, channel_name, item as splited_expid, imei, is_feed_act_imei, SUM(show_num), SUM(click_num), SUM(play_time), SUM(using_duration), (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num), SUM(comment_num), SUM(negative_num)
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+lateral view explode(split(concat_ws(',', expid, '000'), ',')) tmp as item
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei;
+
+
+
+
+
+-- try  这个快一些？  查询 2      问题： 浏览时长为负数的很多     执行时间7m
+select scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei, show_num, click_num, play_time, using_duration, liulan, like_num, comment_num, negative_num
+from (select scene_app, imei_source, channel_name, split(concat_ws(',', expid, '000'), ',') as expid_array, imei, is_feed_act_imei, SUM(show_num) as show_num, SUM(click_num) as click_num, SUM(play_time) as play_time, SUM(using_duration) as using_duration, (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num) as like_num, SUM(comment_num) as comment_num, SUM(negative_num) as negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei
+)
+subquery lateral view explode(expid_array) exploded as splited_expid;
+
+
+
+
+
+-- 查询4   看原数据，是有很多 using_duration 小于 play_time 的
+select scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei, show_num, click_num, play_time, using_duration, like_num,  comment_num, negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei, show_num, click_num, play_time, using_duration, like_num,  comment_num, negative_num
+order by scene_app desc, imei_source desc, channel_name desc, expid desc, imei desc, is_feed_act_imei desc;
+
+
+-- 查询5    看原数据，只求和，不拉开    这个基本都是正的，没问题   执行时间 1m
+select scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei, SUM(show_num) as show_num, SUM(click_num) as click_num, SUM(play_time) as play_time, SUM(using_duration) as using_duration, (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num) as like_num, SUM(comment_num) as comment_num, SUM(negative_num) as negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei
+order by scene_app desc, imei_source desc, channel_name desc, expid desc, imei desc, is_feed_act_imei desc;
+
+
+
+
+-- 基于查询5 改进   尝试    查询6   看看这个的 using_duration - play_time 为负数的还多不多    预计执行时间 17m
+select scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei, show_num,  click_num,  play_time,  using_duration,  liulan, like_num, comment_num, negative_num
+from(
+select scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei, SUM(show_num) as show_num, SUM(click_num) as click_num, SUM(play_time) as play_time, SUM(using_duration) as using_duration, (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num) as like_num, SUM(comment_num) as comment_num, SUM(negative_num) as negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei
+)
+subquery lateral view explode(split(concat_ws(',', expid, '000'), ',')) exploded as splited_expid
+order by scene_app desc, imei_source desc, channel_name desc, splited_expid desc, imei desc, is_feed_act_imei desc;
+
+
+
+-- 查询7
+select scene_app, imei_source, channel_name, split(concat_ws(',', expid, '000'), ',') as expid_array, imei, is_feed_act_imei, SUM(show_num) as show_num, SUM(click_num) as click_num, SUM(play_time) as play_time, SUM(using_duration) as using_duration, (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num) as like_num, SUM(comment_num) as comment_num, SUM(negative_num) as negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid_array, imei, is_feed_act_imei
+order by scene_app desc, imei_source desc, channel_name desc, expid_array desc, imei desc, is_feed_act_imei desc;
+
+
+
+-- 查询6 不排序    查询8     执行时间 6m
+select scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei, show_num,  click_num,  play_time,  using_duration,  liulan, like_num, comment_num, negative_num
+from(
+select scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei, SUM(show_num) as show_num, SUM(click_num) as click_num, SUM(play_time) as play_time, SUM(using_duration) as using_duration, (SUM(using_duration) - SUM(play_time)) as liulan, SUM(like_num) as like_num, SUM(comment_num) as comment_num, SUM(negative_num) as negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei
+)
+subquery lateral view explode(split(concat_ws(',', expid, '000'), ',')) exploded as splited_expid;
+
+
+
+
+-- 查询9 现在使用 channel_duration    执行时长 14m
+select scene_app, imei_source, channel_name, splited_expid, imei, is_feed_act_imei, show_num,  click_num,  play_time,  channel_duration,  liulan, like_num, comment_num, negative_num
+from(
+select scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei, SUM(show_num) as show_num, SUM(click_num) as click_num, SUM(play_time) as play_time, SUM(channel_duration) as channel_duration, (SUM(channel_duration) - SUM(play_time)) as liulan, SUM(like_num) as like_num, SUM(comment_num) as comment_num, SUM(negative_num) as negative_num
+FROM bi_alg_dev.dm_brn_imei_news_info_di
+where day = "2025-07-06"
+group by scene_app, imei_source, channel_name, expid, imei, is_feed_act_imei
+)
+subquery lateral view explode(split(concat_ws(',', expid, '000'), ',')) exploded as splited_expid;
+
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+查询9的正负比较正常，运行速度也还可以 7m
+
+建华哥给的标准的模板：
+
+
+select 
+    a.*,
+    expid1
+from 
+    (select 
+        day,
+        imei,
+        case when scene_app='1' then '主端'
+            when scene_app='2' then '挂件'
+            when scene_app='3' then '负一屏' end as scene_app,
+        case when imei_source='2' then '头条'
+            when imei_source='99' then '自研' else '其他' end as imei_source,
+        case when is_feed_new_imei_14 =1 then '14日新用户' else '老用户' end as is_new_imei,
+        case when brn_module='资讯' and channel_name in ('推荐','发现','要闻','视频','探索') then channel_name else '其他' end as channel_name,
+        case when content_type in ('图文','横版','竖版') then content_type 
+             when content_type in ('短内容','小说','信息流热榜新闻','铺底内容') then '其他泛图文'
+             else '其他' end as content_type,
+        case when brn_module='资讯' and out_side='列表页' then 1 
+             when brn_module='资讯' then 0 else null end as is_liebiao,
+        case when brn_module='资讯' and in_side<>'' then in_side 
+             when brn_module='资讯' then '' else null end as in_side,
+        case when click_cnt>0 then 1 else 0 end as is_click,
+        expid,
+        max(nvl(is_abnormal_imei,'0')) as is_abnormal_imei,
+        max(is_feed_act_imei) as is_feed_act_imei,
+        sum(show_cnt) as show_cnt, 
+        sum(show_num) as show_num,
+        sum(click_cnt) as click_cnt,
+        sum(click_num) as click_num,
+        sum(play_cnt) as play_cnt,
+        sum(play_num) as play_num,
+        sum(play_time) as play_time,
+        sum(max_play_time) as max_play_time,
+        sum(video_time) as video_time,
+        sum(valid_play_num) as valid_play_num,
+        sum(reading_rate) as reading_rate,
+        sum(like_num) as like_num,
+        sum(comment_num) as comment_num,
+        sum(negative_num) as negative_num,
+        sum(channel_duration) as channel_duration,
+        sum(using_duration) as using_duration,
+        count(distinct request_id) as request_alg_num,
+        sum(collection_num) as collection_num,
+        sum(share_num) as share_num,
+        sum(interact_num) as interact_num
+    from 
+        bi_alg_dev.dm_brn_imei_news_info_di a
+    where 
+        day='2025-07-07' 
+    group by 
+        day,
+        imei,
+        scene_app,
+        case when scene_app='1' then '主端'
+            when scene_app='2' then '挂件'
+            when scene_app='3' then '负一屏' end,
+        case when imei_source='2' then '头条'
+            when imei_source='99' then '自研' else '其他' end ,
+        case when is_feed_new_imei_14 =1 then '14日新用户' else '老用户' end ,
+        case when brn_module='资讯' and channel_name in ('推荐','发现','要闻','视频','探索') then channel_name else '其他' end,
+        case when content_type in ('图文','横版','竖版') then content_type 
+             when content_type in ('短内容','小说','信息流热榜新闻','铺底内容') then '其他泛图文'
+             else '其他' end,
+        case when brn_module='资讯' and out_side='列表页' then 1 
+             when brn_module='资讯' then 0 else null end,
+        case when brn_module='资讯' and in_side<>'' then in_side 
+             when brn_module='资讯' then '' else null end,
+        case when click_cnt>0 then 1 else 0 end,
+        expid
+    )a
+    lateral view  explode(split(concat_ws(',','0ALL',expid), ',')) t as expid1
+
